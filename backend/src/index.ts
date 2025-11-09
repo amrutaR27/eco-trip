@@ -1,14 +1,18 @@
 import express from "express";
-import { ApolloServer } from "apollo-server-express";
-import { gql } from "apollo-server-express";
+import { ApolloServer } from "@apollo/server";
+import { expressMiddleware } from '@as-integrations/express4';
+import { gql } from "graphql-tag";
+import cors from "cors";
+import bodyParser from "body-parser";
+
 
 const typeDefs = gql`
   type Route {
     id: ID!
     origin: String!
     destination: String!
-    price: Float!
-    duration: String!
+    price: Float
+    duration: String
   }
 
   type Query {
@@ -16,31 +20,53 @@ const typeDefs = gql`
   }
 `;
 
-const routes = [
-  { id: "1", origin: "London", destination: "Paris", price: 55.5, duration: "2h20" },
-  { id: "2", origin: "London", destination: "Manchester", price: 25.0, duration: "2h00" },
-];
+type Connection = {
+  products?: string[] | null;
+  duration?: string | null;
+};
 
 const resolvers = {
   Query: {
-    getRoutes: (_: any, { origin, destination }: any) =>
-      routes.filter(
-        (r) =>
-          r.origin.toLowerCase().includes(origin.toLowerCase()) &&
-          r.destination.toLowerCase().includes(destination.toLowerCase())
-      ),
+    getRoutes: async (_parent: unknown, args: { origin: string; destination: string }) => {
+      const { origin, destination } = args;
+
+      const response = await fetch(
+        `https://transport.opendata.ch/v1/connections?from=${origin}&to=${destination}`
+      );
+
+      const data: { connections?: Connection[] } = await response.json();
+
+      if (!data || !Array.isArray(data.connections)) return [];
+
+      return data.connections.map((conn: Connection, i: number) => ({
+        id: i.toString(),
+        origin,
+        destination,
+        price: conn.products?.includes("ICE") ? 50 + i * 10 : 30 + i * 5,
+        duration: (conn.duration ?? "Unknown").replace("00d", "").trim() || "Unknown",
+      }));
+    },
   },
 };
 
-async function startServer() {
-  const app = express();
-  const server = new ApolloServer({ typeDefs, resolvers });
-  await server.start();
-  server.applyMiddleware({ app });
+// Initialize Apollo Server
+const server = new ApolloServer({
+  typeDefs,
+  resolvers,
+});
 
-  app.listen(4000, () =>
-    console.log(`🚀 Server ready at http://localhost:4000${server.graphqlPath}`)
+// Create Express app
+const app = express();
+app.use(cors());
+app.use(bodyParser.json());
+
+// Start Apollo
+const startServer = async () => {
+  await server.start();
+  app.use("/graphql", expressMiddleware(server));
+  app.listen({ port: 4000 }, () =>
+    console.log("🚀 Server ready at http://localhost:4000/graphql")
   );
-}
+};
 
 startServer();
